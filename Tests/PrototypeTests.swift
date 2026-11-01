@@ -128,7 +128,7 @@ enum PrototypeTests {
         defer { monitor.stop() }
         for index in 1...2 {
             pasteboard.clearContents()
-            try expect(pasteboard.setString("NotifyTool 测试内容", forType: .string), "测试剪贴板写入失败")
+            try expect(pasteboard.setString("Cuewink 测试内容", forType: .string), "测试剪贴板写入失败")
             writeStartedAt = ProcessInfo.processInfo.systemUptime
             spin(0.45)
             try expect(events.count == index && events.last == .clipboardUpdated, "真实重复写入应各提示一次")
