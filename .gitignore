@@ -1,0 +1,39 @@
+# 依赖
+node_modules/
+vendor/
+.venv/
+venv/
+
+# 构建产物和缓存
+build/
+.build/
+.swiftpm/
+dist/
+out/
+.gradle/
+__pycache__/
+*.pyc
+
+# 环境配置
+.env*
+
+# 系统垃圾文件
+.DS_Store
+Thumbs.db
+
+# 编辑器配置
+.idea/
+.vscode/
+*.swp
+
+# AI 本地配置和工程技能配置
+/.agents/
+/.codex/
+/AGENTS.md
+/docs/agents/issue-tracker.md
+/docs/agents/domain.md
+/CONTEXT.md
+
+# 本地任务记录和临时文件
+/.scratch/
+/.tmp/
