@@ -30,7 +30,8 @@ enum PrototypeTests {
             ("只有大写锁定状态变化才提示", capsLock),
             ("休眠重建基线不补放旧提示", reset),
             ("独立剪贴板真实写入与计时轮询", pasteboardIntegration),
-            ("浮层不抢焦点且刷新消失时间", toastIntegration)
+            ("浮层不抢焦点且刷新消失时间", toastIntegration),
+            ("浮层完整窗口没有额外亮边", toastWindowEdge)
         ]
         for (name, test) in tests {
             try test()
@@ -160,13 +161,57 @@ enum PrototypeTests {
         panel.show(.clipboardUpdated, on: screen)
         try expect(panel.isVisible, "浮层应可见")
         try expect(abs(panel.frame.midX - screen.visibleFrame.midX) < 1, "浮层应水平居中")
+        try checkToastContent(panel, feedback: .clipboardUpdated)
         spin(0.12)
         panel.show(.capsLock(true), on: screen)
+        try checkToastContent(panel, feedback: .capsLock(true))
         spin(0.12)
         try expect(panel.isVisible, "连续触发必须重置消失时间")
         try expect(NSWorkspace.shared.frontmostApplication?.processIdentifier == activePID, "浮层不能激活自身或切走前台应用")
         spin(0.16)
         try expect(!panel.isVisible, "刷新后的浮层应自动消失")
+        panel.show(.capsLock(false), on: screen)
+        try checkToastContent(panel, feedback: .capsLock(false))
         print("桌面验证屏幕数量：\(NSScreen.screens.count)")
+    }
+
+    static func toastWindowEdge() throws {
+        let panel = ToastPanel()
+        defer { panel.hide() }
+        panel.show(.clipboardUpdated)
+        spin(0.15)
+        // 保留窗口框架效果；裁去框架会漏掉系统阴影附带的细线。
+        guard let capture = CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(panel.windowNumber), .bestResolution) else {
+            throw TestFailure(description: "无法捕获完整测试浮层，亮边验证未执行")
+        }
+        let bitmap = NSBitmapImageRep(cgImage: capture)
+        let column = bitmap.pixelsWide / 2
+        let colors = (0..<bitmap.pixelsHigh).map {
+            bitmap.colorAt(x: column, y: $0)!.usingColorSpace(.sRGB)!
+        }
+        guard let edge = colors.firstIndex(where: { $0.alphaComponent > 0.99 }), edge + 10 <= colors.count else {
+            throw TestFailure(description: "无法识别浮层的实色边缘")
+        }
+        func luminance(_ color: NSColor) -> CGFloat {
+            0.2126 * color.redComponent + 0.7152 * color.greenComponent + 0.0722 * color.blueComponent
+        }
+        let rim = colors[edge..<edge + 2].map(luminance).max()!
+        let interior = colors[edge + 4..<edge + 10].map(luminance).reduce(0, +) / 6
+        try expect(rim - interior < 0.06, "完整窗口存在额外亮边，边缘亮度突增 \(rim - interior)")
+    }
+
+    static func checkToastContent(_ panel: ToastPanel, feedback: Feedback) throws {
+        guard let content = panel.contentView,
+              let icon = content.subviews.compactMap({ $0 as? NSImageView }).first,
+              let label = content.subviews.compactMap({ $0 as? NSTextField }).first else {
+            throw TestFailure(description: "浮层缺少图标或提示文字")
+        }
+        content.layoutSubtreeIfNeeded()
+        try expect(abs(panel.frame.width - panel.frame.height) < 1, "浮层必须为正方形")
+        try expect(icon.image != nil && !icon.isHidden, "每种状态必须显示图标")
+        try expect(label.stringValue == feedback.message, "连续切换时必须更新文案")
+        try expect(content.bounds.contains(icon.frame) && content.bounds.contains(label.frame), "图标和文字不能超出浮层")
+        try expect(icon.frame.minY > label.frame.maxY, "图标应位于文字上方且不重叠")
+        try expect(label.intrinsicContentSize.width <= label.bounds.width + 1, "最长提示文案必须完整显示")
     }
 }
