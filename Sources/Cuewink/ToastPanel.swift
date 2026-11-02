@@ -12,14 +12,18 @@ private final class ToastTintView: NSView {
 final class ToastPanel: NSPanel {
     private let icon = NSImageView()
     private let label = NSTextField(labelWithString: "")
-    private let displayDuration: TimeInterval
+    private let background = NSVisualEffectView()
+    private var preferences: Preferences
+    private var scaledConstraints: [NSLayoutConstraint] = []
+    private var lastFeedback: Feedback?
+    private var lastScreen: NSScreen?
     private var dismissTimer: Timer?
 
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
 
-    init(displayDuration: TimeInterval = 1.0) {
-        self.displayDuration = displayDuration
+    init(preferences: Preferences = Preferences()) {
+        self.preferences = preferences
         super.init(
             contentRect: NSRect(x: 0, y: 0, width: 192, height: 192),
             styleMask: [.borderless, .nonactivatingPanel],
@@ -37,14 +41,18 @@ final class ToastPanel: NSPanel {
         animationBehavior = .none
         appearance = NSAppearance(named: .darkAqua)
 
-        let background = NSVisualEffectView(frame: NSRect(origin: .zero, size: frame.size))
+        let content = NSView(frame: NSRect(origin: .zero, size: frame.size))
+        content.wantsLayer = true
+        content.layer?.masksToBounds = true
+        contentView = content
+        background.frame = content.bounds
+        background.autoresizingMask = [.width, .height]
         background.material = .hudWindow
         background.blendingMode = .behindWindow
         background.state = .active
         background.wantsLayer = true
-        background.layer?.cornerRadius = 22.4
         background.layer?.masksToBounds = true
-        contentView = background
+        content.addSubview(background)
 
         let tint = ToastTintView(frame: background.bounds)
         tint.autoresizingMask = [.width, .height]
@@ -52,35 +60,61 @@ final class ToastPanel: NSPanel {
 
         icon.imageScaling = .scaleProportionallyUpOrDown
         icon.translatesAutoresizingMaskIntoConstraints = false
-        background.addSubview(icon)
+        content.addSubview(icon)
 
         label.font = .systemFont(ofSize: 17.6, weight: .semibold)
         label.textColor = NSColor(white: 0.96, alpha: 1)
         label.alignment = .center
         label.translatesAutoresizingMaskIntoConstraints = false
-        background.addSubview(label)
-        NSLayoutConstraint.activate([
-            icon.centerXAnchor.constraint(equalTo: background.centerXAnchor),
-            icon.topAnchor.constraint(equalTo: background.topAnchor, constant: 35.2),
+        content.addSubview(label)
+        scaledConstraints = [
+            icon.topAnchor.constraint(equalTo: content.topAnchor, constant: 35.2),
             icon.widthAnchor.constraint(equalToConstant: 70.4),
             icon.heightAnchor.constraint(equalToConstant: 70.4),
-            label.centerXAnchor.constraint(equalTo: background.centerXAnchor),
             label.topAnchor.constraint(equalTo: icon.bottomAnchor, constant: 19.2),
-            label.leadingAnchor.constraint(greaterThanOrEqualTo: background.leadingAnchor, constant: 12.8),
-            label.trailingAnchor.constraint(lessThanOrEqualTo: background.trailingAnchor, constant: -12.8)
+            label.leadingAnchor.constraint(greaterThanOrEqualTo: content.leadingAnchor, constant: 12.8),
+            label.trailingAnchor.constraint(lessThanOrEqualTo: content.trailingAnchor, constant: -12.8)
+        ]
+        NSLayoutConstraint.activate(scaledConstraints + [
+            icon.centerXAnchor.constraint(equalTo: content.centerXAnchor), label.centerXAnchor.constraint(equalTo: content.centerXAnchor)
         ])
+        apply(preferences)
     }
 
     func show(_ feedback: Feedback, on screen: NSScreen? = NSScreen.main) {
-        guard let screen else { return }
+        guard preferences.allows(feedback), let screen else { return }
         dismissTimer?.invalidate()
+        lastFeedback = feedback
+        lastScreen = screen
         icon.image = Self.image(for: feedback)
         label.stringValue = feedback.message
-        let area = screen.visibleFrame
-        setFrameOrigin(NSPoint(x: area.midX - frame.width / 2, y: area.minY + 32))
+        setFrameOrigin(preferences.position.frame(size: preferences.size.points, in: screen.visibleFrame).origin)
         orderFrontRegardless()
+        scheduleDismissal()
+    }
 
-        let timer = Timer(timeInterval: displayDuration, repeats: false) { [weak self] _ in
+    func apply(_ preferences: Preferences) {
+        let durationChanged = self.preferences.duration != preferences.duration
+        self.preferences = preferences
+        let scale = preferences.size.points / 192
+        setContentSize(NSSize(width: preferences.size.points, height: preferences.size.points))
+        contentView?.layer?.cornerRadius = 22.4 * scale
+        background.layer?.cornerRadius = 22.4 * scale
+        background.alphaValue = preferences.backgroundOpacity
+        label.font = .systemFont(ofSize: 17.6 * scale, weight: .semibold)
+        for (constraint, base) in zip(scaledConstraints, [35.2, 70.4, 70.4, 19.2, 12.8, -12.8]) {
+            constraint.constant = base * scale
+        }
+        if isVisible, let feedback = lastFeedback, let screen = lastScreen {
+            if !preferences.allows(feedback) { hide(); return }
+            setFrameOrigin(preferences.position.frame(size: preferences.size.points, in: screen.visibleFrame).origin)
+            if durationChanged { scheduleDismissal() }
+        }
+    }
+
+    private func scheduleDismissal() {
+        dismissTimer?.invalidate()
+        let timer = Timer(timeInterval: preferences.duration.seconds, repeats: false) { [weak self] _ in
             self?.hide()
         }
         dismissTimer = timer
@@ -141,6 +175,8 @@ final class ToastPanel: NSPanel {
     func hide() {
         dismissTimer?.invalidate()
         dismissTimer = nil
+        lastFeedback = nil
+        lastScreen = nil
         orderOut(nil)
     }
 
