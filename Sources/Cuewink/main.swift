@@ -2,13 +2,14 @@ import AppKit
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
-    private var menuTitle: NSMenuItem?
+    private var menus: ApplicationMenus?
     private let preferences = PreferencesStore()
     private lazy var toast = ToastPanel(preferences: preferences.value)
     private var settings: SettingsWindowController?
     private let sound = NSSound(named: NSSound.Name("Tink"))
     private var workspaceObservers: [NSObjectProtocol] = []
     private var screenObserver: NSObjectProtocol?
+    private var localeObserver: NSObjectProtocol?
     private lazy var monitor = StateMonitor { [weak self] feedback in
         guard let self, self.preferences.value.allows(feedback) else { return }
         self.toast.show(feedback)
@@ -18,7 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard let menuImage = Bundle.main.image(forResource: "MenuBarTemplate") else {
             NSApp.presentError(NSError(domain: "local.cuewink.prototype", code: 1, userInfo: [
-                NSLocalizedDescriptionKey: "Cuewink 菜单栏图标资源缺失，请重新构建应用。"
+                NSLocalizedDescriptionKey: LocalizedText.missingMenuIcon.string(in: preferences.value.interfaceLanguage)
             ]))
             NSApp.terminate(nil)
             return
@@ -28,35 +29,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menuImage.accessibilityDescription = "Cuewink"
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         item.button?.image = menuImage
-        item.button?.toolTip = "Cuewink · 剪贴板与大写锁定提示"
-        let menu = NSMenu()
-        let title = NSMenuItem(title: "Cuewink · 运行中", action: nil, keyEquivalent: "")
-        title.isEnabled = false
-        menu.addItem(title)
-        menuTitle = title
-        menu.addItem(.separator())
-        let settingsItem = menu.addItem(withTitle: "设置…", action: #selector(openSettings(_:)), keyEquivalent: ",")
-        settingsItem.target = self
-        menu.addItem(.separator())
-        menu.addItem(withTitle: "退出 Cuewink", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
-        item.menu = menu
+        let menus = ApplicationMenus(settingsTarget: self, settingsAction: #selector(openSettings(_:)))
+        self.menus = menus
+        item.menu = menus.statusMenu
         statusItem = item
-        let mainMenu = NSMenu()
-        let applicationItem = NSMenuItem()
-        let applicationMenu = NSMenu(title: "Cuewink")
-        let shortcut = applicationMenu.addItem(withTitle: "设置…", action: #selector(openSettings(_:)), keyEquivalent: ",")
-        shortcut.target = self
-        applicationMenu.addItem(withTitle: "关闭窗口", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
-        applicationMenu.addItem(.separator())
-        applicationMenu.addItem(withTitle: "退出 Cuewink", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
-        applicationItem.submenu = applicationMenu
-        mainMenu.addItem(applicationItem)
-        NSApp.mainMenu = mainMenu
+        NSApp.mainMenu = menus.mainMenu
         preferences.onChange = { [weak self] value in
-            self?.toast.apply(value)
-            self?.updateMenu(value)
+            self?.applyPreferences(value)
         }
-        updateMenu(preferences.value)
+        applyPreferences(preferences.value)
+        localeObserver = NotificationCenter.default.addObserver(forName: NSLocale.currentLocaleDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            guard let self else { return }
+            self.applyPreferences(self.preferences.value)
+        }
 
         let center = NSWorkspace.shared.notificationCenter
         for name in [NSWorkspace.willSleepNotification, NSWorkspace.sessionDidResignActiveNotification] {
@@ -79,8 +64,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         monitor.start()
     }
 
-    private func updateMenu(_ value: Preferences) {
-        menuTitle?.title = value.clipboardEnabled || value.capsLockEnabled ? "Cuewink · 运行中" : "Cuewink · 提示已关闭"
+    private func applyPreferences(_ value: Preferences) {
+        toast.apply(value)
+        menus?.update(value)
+        statusItem?.button?.toolTip = LocalizedText.statusTooltip.string(in: value.interfaceLanguage)
+        settings?.refresh()
     }
 
     private func playSound() {
@@ -101,6 +89,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         workspaceObservers.forEach { NSWorkspace.shared.notificationCenter.removeObserver($0) }
         if let screenObserver {
             NotificationCenter.default.removeObserver(screenObserver)
+        }
+        if let localeObserver {
+            NotificationCenter.default.removeObserver(localeObserver)
         }
         if let statusItem {
             NSStatusBar.system.removeStatusItem(statusItem)

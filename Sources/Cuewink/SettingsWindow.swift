@@ -66,8 +66,6 @@ final class ScreenPositionPicker: NSView {
             button.tag = position.rawValue
             button.setButtonType(.toggle)
             button.isBordered = false
-            button.setAccessibilityLabel(position.title)
-            button.toolTip = position.title
             button.state = position == self.position ? .on : .off
             buttons.append(button)
             addSubview(button)
@@ -75,6 +73,15 @@ final class ScreenPositionPicker: NSView {
     }
 
     required init?(coder: NSCoder) { fatalError("不支持从归档初始化") }
+
+    func updateLanguage(_ language: InterfaceLanguage) {
+        for button in buttons {
+            guard let position = ToastPosition(rawValue: button.tag) else { continue }
+            let title = position.title(in: language)
+            button.setAccessibilityLabel(title)
+            button.toolTip = title
+        }
+    }
 
     override func layout() {
         super.layout()
@@ -130,11 +137,14 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let durationLabel = NSTextField(labelWithString: "")
     private let opacityLabel = NSTextField(labelWithString: "")
     private let loginNotice = NSTextField(wrappingLabelWithString: "")
-    private let loginHelp = NSButton(title: "前往系统设置", target: nil, action: nil)
+    private let loginHelp = NSButton(title: "", target: nil, action: nil)
+    private let auditionButton = NSButton(title: "", target: nil, action: nil)
+    private let languageControl = NSPopUpButton(frame: .zero, pullsDown: false)
+    private var localizedLabels: [(NSTextField, LocalizedText)] = []
     private let loginDetails = NSView()
     private var loginFailure: (enabled: Bool, detail: String)?
-    private let durationControl = NSSegmentedControl(labels: ["短", "中", "长"], trackingMode: .selectOne, target: nil, action: nil)
-    private let sizeControl = NSSegmentedControl(labels: ["小", "中", "大"], trackingMode: .selectOne, target: nil, action: nil)
+    private let durationControl = NSSegmentedControl(labels: ["", "", ""], trackingMode: .selectOne, target: nil, action: nil)
+    private let sizeControl = NSSegmentedControl(labels: ["", "", ""], trackingMode: .selectOne, target: nil, action: nil)
     private let opacitySlider = NSSlider(value: 85, minValue: 40, maxValue: 100, target: nil, action: nil)
 
     init(store: PreferencesStore, loginItem: LoginItemManaging = SystemLoginItem(), playSound: @escaping () -> Void) {
@@ -143,7 +153,6 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         self.playSound = playSound
         let availableHeight = NSScreen.main?.visibleFrame.height ?? 820
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: min(736, availableHeight - 70)), styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
-        window.title = "Cuewink 设置"
         window.isReleasedWhenClosed = false
         super.init(window: window)
         window.delegate = self
@@ -183,7 +192,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         document.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor).isActive = true
 
         let positionHeading = NSView()
-        let heading = label("屏幕显示位置", size: 12, weight: .semibold)
+        let heading = label(.screenPosition, size: 12, weight: .semibold)
         positionLabel.font = .systemFont(ofSize: 12)
         positionLabel.textColor = .secondaryLabelColor
         positionHeading.addSubview(heading)
@@ -198,15 +207,15 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         picker.onChange = { [weak self] position in self?.update { $0.position = position } }
         let positionSection = column([positionHeading, picker], spacing: 9)
 
-        for (control, title) in [(loginSwitch, "登录时启动"), (clipboardSwitch, "剪贴板更新提示"), (capsLockSwitch, "大写锁定提示"), (soundSwitch, "提示音")] {
+        for control in [loginSwitch, clipboardSwitch, capsLockSwitch, soundSwitch] {
             control.target = self
             control.action = #selector(toggle(_:))
-            control.setAccessibilityLabel(title)
         }
-        let audition = NSButton(title: "试听", target: self, action: #selector(audition(_:)))
-        audition.bezelStyle = .rounded
-        audition.controlSize = .small
-        let soundControls = NSStackView(views: [audition, soundSwitch])
+        auditionButton.target = self
+        auditionButton.action = #selector(audition(_:))
+        auditionButton.bezelStyle = .rounded
+        auditionButton.controlSize = .small
+        let soundControls = NSStackView(views: [auditionButton, soundSwitch])
         soundControls.spacing = 8
         soundControls.alignment = .centerY
         loginNotice.font = .systemFont(ofSize: 11)
@@ -231,13 +240,22 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             loginNotice.widthAnchor.constraint(equalTo: details.widthAnchor)
         ])
         loginDetails.identifier = NSUserInterfaceItemIdentifier("loginDetails")
-        let loginRow = column([row("登录时启动", control: loginSwitch), loginDetails], spacing: 0)
+        let loginRow = column([row(.launchAtLogin, control: loginSwitch), loginDetails], spacing: 0)
         loginRow.identifier = NSUserInterfaceItemIdentifier("loginSettingRow")
-        let general = section("通用", rows: [
+        languageControl.identifier = NSUserInterfaceItemIdentifier("interfaceLanguage")
+        languageControl.target = self
+        languageControl.action = #selector(selectLanguage(_:))
+        languageControl.widthAnchor.constraint(equalToConstant: 184).isActive = true
+        for option in LanguagePreference.allCases {
+            languageControl.addItem(withTitle: option.title(in: store.value.interfaceLanguage))
+            languageControl.lastItem?.tag = option.rawValue
+        }
+        let general = section(.general, rows: [
+            row(.interfaceLanguage, control: languageControl),
             loginRow,
-            row("剪贴板更新提示", control: clipboardSwitch),
-            row("大写锁定提示", control: capsLockSwitch),
-            row("提示音", control: soundControls)
+            row(.clipboardAlerts, control: clipboardSwitch),
+            row(.capsLockAlerts, control: capsLockSwitch),
+            row(.sound, control: soundControls)
         ])
 
         durationLabel.font = .systemFont(ofSize: 11)
@@ -248,12 +266,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             control.action = #selector(selectSegment(_:))
             control.widthAnchor.constraint(equalToConstant: 184).isActive = true
         }
-        durationControl.setAccessibilityLabel("显示时长")
-        sizeControl.setAccessibilityLabel("浮层尺寸")
         opacitySlider.target = self
         opacitySlider.action = #selector(changeOpacity(_:))
         opacitySlider.isContinuous = true
-        opacitySlider.setAccessibilityLabel("背景不透明度")
         opacityLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
         opacityLabel.textColor = .secondaryLabelColor
         opacityLabel.alignment = .right
@@ -262,11 +277,11 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         opacityControl.alignment = .centerY
         opacityControl.spacing = 9
         opacityControl.widthAnchor.constraint(equalToConstant: 184).isActive = true
-        let display = section("显示", rows: [
-            row("显示时长", control: durationControl, detail: durationLabel),
-            row("浮层尺寸", control: sizeControl), row("背景不透明度", control: opacityControl)
+        let display = section(.display, rows: [
+            row(.duration, control: durationControl, detail: durationLabel),
+            row(.size, control: sizeControl), row(.backgroundOpacity, control: opacityControl)
         ])
-        let footer = label("设置自动保存", size: 11)
+        let footer = label(.autosave, size: 11)
         footer.textColor = .secondaryLabelColor
         footer.alignment = .center
         let stack = column([positionSection, general, display, footer], spacing: 16)
@@ -279,9 +294,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         ])
     }
 
-    private func label(_ text: String, size: CGFloat = 13, weight: NSFont.Weight = .regular) -> NSTextField {
-        let field = NSTextField(labelWithString: text)
+    private func label(_ text: LocalizedText, size: CGFloat = 13, weight: NSFont.Weight = .regular) -> NSTextField {
+        let field = NSTextField(labelWithString: text.string(in: store.value.interfaceLanguage))
         field.font = .systemFont(ofSize: size, weight: weight)
+        localizedLabels.append((field, text))
         return field
     }
 
@@ -297,7 +313,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         return stack
     }
 
-    private func section(_ title: String, rows: [NSView]) -> NSView {
+    private func section(_ title: LocalizedText, rows: [NSView]) -> NSView {
         var contents: [NSView] = []
         for (index, row) in rows.enumerated() {
             if index > 0 {
@@ -319,7 +335,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         return column([label(title, size: 12, weight: .semibold), group], spacing: 6)
     }
 
-    private func row(_ title: String, control: NSView, detail: NSView? = nil) -> NSView {
+    private func row(_ title: LocalizedText, control: NSView, detail: NSView? = nil) -> NSView {
         let row = NSView()
         let text: NSView = detail.map { column([label(title), $0], spacing: 2) } ?? label(title)
         for view in [text, control] { view.translatesAutoresizingMaskIntoConstraints = false; row.addSubview(view) }
@@ -337,15 +353,34 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         refresh()
     }
 
-    private func refresh() {
+    func refresh() {
         let value = store.value
+        let language = value.interfaceLanguage
+        window?.title = LocalizedText.settingsTitle.string(in: language)
+        for (field, text) in localizedLabels { field.stringValue = text.string(in: language) }
+        let accessibility: [(NSView, LocalizedText)] = [
+            (languageControl, .interfaceLanguage), (loginSwitch, .launchAtLogin),
+            (clipboardSwitch, .clipboardAlerts), (capsLockSwitch, .capsLockAlerts), (soundSwitch, .sound),
+            (durationControl, .duration), (sizeControl, .size), (opacitySlider, .backgroundOpacity)
+        ]
+        for (control, text) in accessibility { control.setAccessibilityLabel(text.string(in: language)) }
+        auditionButton.title = LocalizedText.audition.string(in: language)
+        loginHelp.title = LocalizedText.openSystemSettings.string(in: language)
+        for option in LanguagePreference.allCases {
+            languageControl.item(at: option.rawValue)?.title = option.title(in: language)
+        }
+        languageControl.selectItem(withTag: value.language.rawValue)
+        for (control, keys) in [(durationControl, [LocalizedText.short, .medium, .long]), (sizeControl, [.small, .mediumSize, .large])] {
+            for (index, text) in keys.enumerated() { control.setLabel(text.string(in: language), forSegment: index) }
+        }
         clipboardSwitch.state = value.clipboardEnabled ? .on : .off
         capsLockSwitch.state = value.capsLockEnabled ? .on : .off
         soundSwitch.state = value.soundEnabled ? .on : .off
         picker.position = value.position
-        positionLabel.stringValue = value.position.title
+        picker.updateLanguage(language)
+        positionLabel.stringValue = value.position.title(in: language)
         durationControl.selectedSegment = value.duration.rawValue
-        durationLabel.stringValue = "\(value.duration.seconds.formatted()) 秒"
+        durationLabel.stringValue = "\(value.duration.seconds.formatted(.number.locale(language.locale))) \(LocalizedText.seconds.string(in: language))"
         sizeControl.selectedSegment = value.size.rawValue
         opacitySlider.doubleValue = value.backgroundOpacity * 100
         opacityLabel.stringValue = "\(Int((value.backgroundOpacity * 100).rounded()))%"
@@ -361,12 +396,13 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         }
         loginNotice.toolTip = loginFailure?.detail
         loginNotice.textColor = loginFailure == nil ? .secondaryLabelColor : .systemRed
+        let language = store.value.interfaceLanguage
         if let failure = loginFailure {
-            loginNotice.stringValue = failure.enabled ? "未能开启登录时启动，请重试。" : "未能关闭登录时启动，请重试。"
+            loginNotice.stringValue = (failure.enabled ? LocalizedText.loginEnableFailed : .loginDisableFailed).string(in: language)
         } else if status == .requiresApproval {
-            loginNotice.stringValue = "需要在系统设置中允许 Cuewink 登录时启动。"
+            loginNotice.stringValue = LocalizedText.loginApproval.string(in: language)
         } else if status == .unconfirmed {
-            loginNotice.stringValue = "暂时无法获取登录启动状态。"
+            loginNotice.stringValue = LocalizedText.loginUnconfirmed.string(in: language)
         } else {
             loginNotice.stringValue = ""
         }
@@ -397,6 +433,11 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             if sender === durationControl, let value = ToastDuration(rawValue: sender.selectedSegment) { $0.duration = value }
             else if sender === sizeControl, let value = ToastSize(rawValue: sender.selectedSegment) { $0.size = value }
         }
+    }
+
+    @objc private func selectLanguage(_ sender: NSPopUpButton) {
+        guard let tag = sender.selectedItem?.tag, let language = LanguagePreference(rawValue: tag) else { return }
+        update { $0.language = language }
     }
 
     @objc private func changeOpacity(_ sender: NSSlider) {

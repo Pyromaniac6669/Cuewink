@@ -3,8 +3,9 @@ import AppKit
 enum ToastPosition: Int, CaseIterable {
     case topLeft, topCenter, topRight, centerLeft, center, centerRight, bottomLeft, bottomCenter, bottomRight
 
-    var title: String {
-        ["左上角", "顶部居中", "右上角", "左侧居中", "屏幕中央", "右侧居中", "左下角", "底部居中", "右下角"][rawValue]
+    func title(in language: InterfaceLanguage) -> String {
+        let text: [LocalizedText] = [.topLeft, .topCenter, .topRight, .centerLeft, .center, .centerRight, .bottomLeft, .bottomCenter, .bottomRight]
+        return text[rawValue].string(in: language)
     }
 
     func frame(size: CGFloat, in area: NSRect) -> NSRect {
@@ -36,6 +37,9 @@ struct Preferences: Equatable {
     var duration = ToastDuration.medium
     var size = ToastSize.medium
     var backgroundOpacity = 0.85
+    var language = LanguagePreference.system
+
+    var interfaceLanguage: InterfaceLanguage { language.resolve() }
 
     func allows(_ feedback: Feedback) -> Bool {
         switch feedback {
@@ -57,6 +61,7 @@ final class PreferencesStore {
             defaults.set(value.duration.rawValue, forKey: "toastDuration")
             defaults.set(value.size.rawValue, forKey: "toastSize")
             defaults.set(value.backgroundOpacity, forKey: "backgroundOpacity")
+            defaults.set(value.language.rawValue, forKey: "interfaceLanguage")
             onChange?(value)
         }
     }
@@ -67,7 +72,7 @@ final class PreferencesStore {
             "clipboardEnabled": true, "capsLockEnabled": true, "soundEnabled": false,
             "toastPosition": ToastPosition.bottomCenter.rawValue,
             "toastDuration": ToastDuration.medium.rawValue, "toastSize": ToastSize.medium.rawValue,
-            "backgroundOpacity": 0.85
+            "backgroundOpacity": 0.85, "interfaceLanguage": LanguagePreference.system.rawValue
         ])
         let opacity = defaults.double(forKey: "backgroundOpacity")
         value = Preferences(
@@ -77,7 +82,8 @@ final class PreferencesStore {
             position: ToastPosition(rawValue: defaults.integer(forKey: "toastPosition")) ?? .bottomCenter,
             duration: ToastDuration(rawValue: defaults.integer(forKey: "toastDuration")) ?? .medium,
             size: ToastSize(rawValue: defaults.integer(forKey: "toastSize")) ?? .medium,
-            backgroundOpacity: opacity.isFinite ? min(1, max(0.4, opacity)) : 0.85
+            backgroundOpacity: opacity.isFinite ? min(1, max(0.4, opacity)) : 0.85,
+            language: LanguagePreference(rawValue: defaults.integer(forKey: "interfaceLanguage")) ?? .system
         )
     }
 }

@@ -46,6 +46,13 @@ enum PrototypeTests {
     }
 
     static func runTests() throws {
+        NSApplication.shared.setActivationPolicy(.accessory)
+        let localizationTests: [(String, () throws -> Void)] = [
+            ("语言匹配、回退和偏好保存", languagePreferences),
+            ("双菜单文字、状态与快捷键同步切换", localizedMenus),
+            ("语言切换保留控件、登录错误并适配英文布局", localizedSettings),
+            ("中英文浮层三档布局与切换不延长计时", localizedToast)
+        ]
         let allTests: [(String, () throws -> Void)] = [
             ("启动基线与无更新保持安静", baseline),
             ("稳定更新只提示一次", stableUpdate),
@@ -61,10 +68,12 @@ enum PrototypeTests {
             ("偏好保存、重新读取和无效值边界", preferences),
             ("九方位在负坐标屏幕内正确定位", positions),
             ("浮层尺寸、背景透明度和开关即时生效", configurableToast),
-            ("设置窗口交互、复用和登录项状态反馈", settingsWindow),
+            ("设置窗口交互、复用和登录项状态反馈", settingsWindow)
+        ] + localizationTests + [
             ("登录启动状态与行内说明回归", loginStatusFeedback)
         ]
-        let tests = CommandLine.arguments.contains("--login-status") ? Array(allTests.suffix(1)) : allTests
+        let tests = CommandLine.arguments.contains("--localization") ? localizationTests :
+            CommandLine.arguments.contains("--login-status") ? Array(allTests.suffix(1)) : allTests
         for (name, test) in tests {
             try test()
             print("通过：\(name)")
@@ -187,7 +196,7 @@ enum PrototypeTests {
         guard let activePID = NSWorkspace.shared.frontmostApplication?.processIdentifier else {
             throw TestFailure(description: "无法识别前台应用，焦点保持验证未执行")
         }
-        let panel = ToastPanel(preferences: Preferences(duration: .short))
+        let panel = ToastPanel(preferences: Preferences(duration: .short, language: .simplifiedChinese))
         defer { panel.hide() }
         try expect(!panel.canBecomeKey && !panel.canBecomeMain && panel.ignoresMouseEvents, "浮层必须不接收焦点和点击")
         panel.show(.clipboardUpdated, on: screen)
@@ -277,7 +286,7 @@ enum PrototypeTests {
         let panel = ToastPanel()
         defer { panel.hide() }
         guard let screen = NSScreen.main else { throw TestFailure(description: "无法取得测试屏幕") }
-        var preferences = Preferences()
+        var preferences = Preferences(language: .simplifiedChinese)
         for size in ToastSize.allCases {
             preferences.size = size
             preferences.backgroundOpacity = 0.4
@@ -306,7 +315,7 @@ enum PrototypeTests {
     }
 
     static func settingsWindow() throws {
-        let store = PreferencesStore(defaults: MemoryDefaults())
+        let store = PreferencesStore(defaults: MemoryDefaults(storage: ["interfaceLanguage": LanguagePreference.simplifiedChinese.rawValue]))
         let login = TestLoginItem()
         var auditions = 0
         let controller = SettingsWindowController(store: store, loginItem: login) { auditions += 1 }
@@ -338,7 +347,7 @@ enum PrototypeTests {
         let position = try named("顶部居中", as: NSButton.self)
         position.performClick(nil)
         try expect(store.value.position == .topCenter, "九宫格必须保存所选方位")
-        try expect(views.compactMap { $0 as? NSButton }.filter { button in ToastPosition.allCases.contains { $0.title == button.accessibilityLabel() } }.count == 9, "九宫格必须有九个可操作位置")
+        try expect(views.compactMap { $0 as? NSButton }.filter { button in ToastPosition.allCases.contains { $0.title(in: .simplifiedChinese) == button.accessibilityLabel() } }.count == 9, "九宫格必须有九个可操作位置")
         let size = try named("浮层尺寸", as: NSSegmentedControl.self)
         size.selectedSegment = ToastSize.large.rawValue
         send(size)
@@ -379,7 +388,7 @@ enum PrototypeTests {
         NSApplication.shared.setActivationPolicy(.accessory)
         let login = TestLoginItem()
         login.status = .unconfirmed
-        let controller = SettingsWindowController(store: PreferencesStore(defaults: MemoryDefaults()), loginItem: login) {}
+        let controller = SettingsWindowController(store: PreferencesStore(defaults: MemoryDefaults(storage: ["interfaceLanguage": LanguagePreference.simplifiedChinese.rawValue])), loginItem: login) {}
         guard let window = controller.window, let content = window.contentView else { throw TestFailure(description: "设置窗口未创建") }
         controller.showWindow(nil)
         defer { window.close() }
@@ -455,16 +464,141 @@ enum PrototypeTests {
         try capture("login-inline-feedback.png")
     }
 
-    static func checkToastContent(_ panel: ToastPanel, feedback: Feedback) throws {
+    static func languagePreferences() throws {
+        let cases: [([String], InterfaceLanguage)] = [
+            (["zh-Hans-CN", "en"], .simplifiedChinese), (["zh-Hant-TW"], .simplifiedChinese),
+            (["ZH_hant_HK"], .simplifiedChinese), (["en-GB", "zh-Hans"], .english),
+            (["ja-JP", "zh-CN", "en-US"], .simplifiedChinese), (["ja", "en", "zh"], .english),
+            (["fr", "de"], .english), ([], .english), (["", "zho", "english"], .english)
+        ]
+        for (preferred, expected) in cases {
+            try expect(LanguagePreference.system.resolve(preferredLanguages: preferred) == expected, "系统首选语言必须按顺序匹配、中文变体归为简体、无匹配时使用英语：\(preferred)")
+            try expect(LanguagePreference.simplifiedChinese.resolve(preferredLanguages: preferred) == .simplifiedChinese, "手动中文不受系统影响")
+            try expect(LanguagePreference.english.resolve(preferredLanguages: preferred) == .english, "手动英语不受系统影响")
+        }
+        let defaults = MemoryDefaults()
+        let store = PreferencesStore(defaults: defaults)
+        try expect(store.value.language == .system, "默认语言偏好必须跟随系统")
+        for language in LanguagePreference.allCases {
+            store.value.language = language
+            try expect(PreferencesStore(defaults: defaults).value.language == language, "重建偏好必须保留语言选择")
+        }
+        try expect(PreferencesStore(defaults: MemoryDefaults(storage: ["interfaceLanguage": 99])).value.language == .system, "无效语言值回退跟随系统")
+    }
+
+    static func localizedMenus() throws {
+        let action = #selector(NSApplication.orderFrontStandardAboutPanel(_:))
+        let menus = ApplicationMenus(settingsTarget: NSApp, settingsAction: action)
+        guard let application = menus.mainMenu.items.first?.submenu else { throw TestFailure(description: "缺少应用菜单") }
+        for (preference, language) in [(LanguagePreference.english, InterfaceLanguage.english), (.simplifiedChinese, .simplifiedChinese)] {
+            var value = Preferences(language: preference)
+            menus.update(value)
+            try expect(menus.statusMenu.items.first?.title == LocalizedText.running.string(in: language), "菜单状态必须同步翻译")
+            for menu in [menus.statusMenu, application] {
+                guard let settings = menu.items.first(where: { $0.keyEquivalent == "," }),
+                      let quit = menu.items.first(where: { $0.keyEquivalent == "q" }) else { throw TestFailure(description: "缺少菜单快捷键") }
+                try expect(settings.title == LocalizedText.settings.string(in: language) && settings.action == action && settings.target === NSApp, "设置文字更新时必须保留动作和快捷键")
+                try expect(quit.title == LocalizedText.quit.string(in: language) && quit.action == #selector(NSApplication.terminate(_:)), "退出菜单必须同步翻译并保留动作")
+            }
+            try expect(application.items.first(where: { $0.keyEquivalent == "w" })?.title == LocalizedText.closeWindow.string(in: language), "关闭窗口快捷键必须保留")
+            value.clipboardEnabled = false
+            value.capsLockEnabled = false
+            menus.update(value)
+            try expect(menus.statusMenu.items.first?.title == LocalizedText.feedbackDisabled.string(in: language), "关闭提示后的状态也必须翻译")
+        }
+    }
+
+    static func localizedSettings() throws {
+        let defaults = MemoryDefaults(storage: ["interfaceLanguage": LanguagePreference.simplifiedChinese.rawValue])
+        let store = PreferencesStore(defaults: defaults)
+        let login = TestLoginItem()
+        login.fails = true
+        let controller = SettingsWindowController(store: store, loginItem: login) {}
+        guard let window = controller.window, let content = window.contentView else { throw TestFailure(description: "设置窗口未创建") }
+        controller.showWindow(nil)
+        defer { window.close() }
+        func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+        let views = descendants(content)
+        guard let popup = views.compactMap({ $0 as? NSPopUpButton }).first,
+              let toggle = views.compactMap({ $0 as? NSSwitch }).first(where: { $0.accessibilityLabel() == "登录时启动" }),
+              let notice = views.compactMap({ $0 as? NSTextField }).first(where: { $0.identifier?.rawValue == "loginNotice" }) else { throw TestFailure(description: "缺少语言或登录控件") }
+        toggle.state = .on
+        NSApp.sendAction(toggle.action!, to: toggle.target, from: toggle)
+        let detail = notice.toolTip
+        for (preference, language) in [(LanguagePreference.english, InterfaceLanguage.english), (.simplifiedChinese, .simplifiedChinese), (.system, LanguagePreference.system.resolve())] {
+            popup.selectItem(withTag: preference.rawValue)
+            NSApp.sendAction(popup.action!, to: popup.target, from: popup)
+            spin(0.1)
+            content.layoutSubtreeIfNeeded()
+            try expect(window.title == LocalizedText.settingsTitle.string(in: language), "已打开窗口必须即时切换标题")
+            try expect(popup.selectedItem?.tag == preference.rawValue && PreferencesStore(defaults: defaults).value.language == preference, "选择必须即时保存")
+            try expect(popup.menu?.item(withTag: LanguagePreference.simplifiedChinese.rawValue)?.title == "简体中文" && popup.menu?.item(withTag: LanguagePreference.english.rawValue)?.title == "English", "语言自称必须保持固定")
+            try expect(popup.menu?.item(withTag: LanguagePreference.system.rawValue)?.title == LocalizedText.followSystem.string(in: language), "跟随系统选项也必须翻译")
+            try expect(views.count == descendants(content).count && popup === descendants(content).compactMap({ $0 as? NSPopUpButton }).first, "切换不应重建窗口控件")
+            try expect(toggle.accessibilityLabel() == LocalizedText.launchAtLogin.string(in: language), "辅助功能标签必须同步切换")
+            try expect(notice.stringValue == LocalizedText.loginEnableFailed.string(in: language) && notice.toolTip == detail, "切换应翻译错误说明并保留原始详情")
+            for position in ToastPosition.allCases {
+                try expect(views.compactMap({ $0 as? NSButton }).contains { $0.toolTip == position.title(in: language) && $0.accessibilityLabel() == position.title(in: language) }, "九方位标签与悬停提示必须全部切换")
+            }
+            let labels = views.compactMap { $0 as? NSTextField }
+            for field in labels where !field.isHidden && field !== notice && !field.stringValue.isEmpty {
+                try expect(field.intrinsicContentSize.width <= field.bounds.width + 1, "设置文字必须完整可见：\(field.stringValue)")
+            }
+            for segment in views.compactMap({ $0 as? NSSegmentedControl }) {
+                try expect(segment.label(forSegment: 1) == LocalizedText.medium.string(in: language), "分段选项必须同步翻译")
+            }
+            if preference == .english {
+                try expect(labels.allSatisfy { $0.stringValue.range(of: "[\\u4e00-\\u9fff]", options: .regularExpression) == nil }, "英语界面不能残留应用中文标签")
+                if let directory = ProcessInfo.processInfo.environment["CUEWINK_TEST_OUTPUT"],
+                   let image = CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(window.windowNumber), .bestResolution),
+                   let data = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]) {
+                    try data.write(to: URL(fileURLWithPath: directory).appendingPathComponent("settings-english.png"))
+                }
+            }
+        }
+        try expect(login.changes == [true], "切换语言不能再次注册登录项")
+        window.close()
+        controller.present()
+        try expect(controller.window === window && popup.selectedItem?.tag == LanguagePreference.system.rawValue, "重新打开窗口保留选择且复用窗口")
+    }
+
+    static func localizedToast() throws {
+        let panel = ToastPanel()
+        defer { panel.hide() }
+        for (preference, language) in [(LanguagePreference.english, InterfaceLanguage.english), (.simplifiedChinese, .simplifiedChinese)] {
+            for size in ToastSize.allCases {
+                panel.apply(Preferences(size: size, language: preference))
+                for feedback in [Feedback.clipboardUpdated, .capsLock(true), .capsLock(false)] {
+                    panel.show(feedback)
+                    try checkToastContent(panel, feedback: feedback, language: language)
+                    try expect(panel.frame.size == NSSize(width: size.points, height: size.points), "语言和尺寸切换后必须保留指定方形尺寸")
+                }
+            }
+        }
+        var value = Preferences(duration: .short, language: .simplifiedChinese)
+        panel.apply(value)
+        panel.show(.clipboardUpdated)
+        spin(0.35)
+        value.language = .english
+        panel.apply(value)
+        try checkToastContent(panel, feedback: .clipboardUpdated, language: .english)
+        try expect(panel.isVisible, "切换语言时浮层应继续可见")
+        spin(0.35)
+        try expect(!panel.isVisible, "只切换语言不能延长原定消失时间")
+        panel.show(.capsLock(false))
+        try checkToastContent(panel, feedback: .capsLock(false), language: .english)
+    }
+
+    static func checkToastContent(_ panel: ToastPanel, feedback: Feedback, language: InterfaceLanguage = .simplifiedChinese) throws {
         guard let content = panel.contentView,
               let icon = content.subviews.compactMap({ $0 as? NSImageView }).first,
               let label = content.subviews.compactMap({ $0 as? NSTextField }).first else {
             throw TestFailure(description: "浮层缺少图标或提示文字")
         }
         content.layoutSubtreeIfNeeded()
-        try expect(abs(panel.frame.width - panel.frame.height) < 1, "浮层必须为正方形")
+        try expect(abs(panel.frame.width - panel.frame.height) < 1, "浮层必须为正方形：\(panel.frame.size)，文案 \(label.stringValue)，自然宽度 \(label.intrinsicContentSize.width)")
         try expect(icon.image != nil && !icon.isHidden, "每种状态必须显示图标")
-        try expect(label.stringValue == feedback.message, "连续切换时必须更新文案")
+        try expect(label.stringValue == feedback.message(in: language), "连续切换时必须更新文案")
         try expect(content.bounds.contains(icon.frame) && content.bounds.contains(label.frame), "图标和文字不能超出浮层")
         try expect(icon.frame.minY > label.frame.maxY, "图标应位于文字上方且不重叠")
         try expect(label.intrinsicContentSize.width <= label.bounds.width + 1, "最长提示文案必须完整显示")

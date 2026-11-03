@@ -5,12 +5,14 @@ enum Feedback: Equatable {
     case clipboardUpdated
     case capsLock(Bool)
 
-    var message: String {
+    func message(in language: InterfaceLanguage) -> String {
+        let text: LocalizedText
         switch self {
-        case .clipboardUpdated: return "剪贴板已更新"
-        case .capsLock(true): return "大写锁定已开启"
-        case .capsLock(false): return "大写锁定已关闭"
+        case .clipboardUpdated: text = .clipboardUpdated
+        case .capsLock(true): text = .capsLockOn
+        case .capsLock(false): text = .capsLockOff
         }
+        return text.string(in: language)
     }
 }
 

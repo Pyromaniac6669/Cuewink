@@ -87,7 +87,7 @@ final class ToastPanel: NSPanel {
         lastFeedback = feedback
         lastScreen = screen
         icon.image = Self.image(for: feedback)
-        label.stringValue = feedback.message
+        label.stringValue = feedback.message(in: preferences.interfaceLanguage)
         setFrameOrigin(preferences.position.frame(size: preferences.size.points, in: screen.visibleFrame).origin)
         orderFrontRegardless()
         scheduleDismissal()
@@ -97,7 +97,6 @@ final class ToastPanel: NSPanel {
         let durationChanged = self.preferences.duration != preferences.duration
         self.preferences = preferences
         let scale = preferences.size.points / 192
-        setContentSize(NSSize(width: preferences.size.points, height: preferences.size.points))
         contentView?.layer?.cornerRadius = 22.4 * scale
         background.layer?.cornerRadius = 22.4 * scale
         background.alphaValue = preferences.backgroundOpacity
@@ -105,6 +104,12 @@ final class ToastPanel: NSPanel {
         for (constraint, base) in zip(scaledConstraints, [35.2, 70.4, 70.4, 19.2, 12.8, -12.8]) {
             constraint.constant = base * scale
         }
+        if let feedback = lastFeedback {
+            label.stringValue = feedback.message(in: preferences.interfaceLanguage)
+        }
+        // 先更新文字和约束，避免旧字号的最小宽度把缩小后的窗口撑宽。
+        contentView?.layoutSubtreeIfNeeded()
+        setContentSize(NSSize(width: preferences.size.points, height: preferences.size.points))
         if isVisible, let feedback = lastFeedback, let screen = lastScreen {
             if !preferences.allows(feedback) { hide(); return }
             setFrameOrigin(preferences.position.frame(size: preferences.size.points, in: screen.visibleFrame).origin)
